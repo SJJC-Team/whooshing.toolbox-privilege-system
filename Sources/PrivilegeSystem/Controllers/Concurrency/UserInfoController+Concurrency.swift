@@ -4,7 +4,6 @@ import PrivilegeModule
 // MARK: - UserInfoController Concurrency (UserInfoController.swift)
 
 extension PrivilegeSystem.UserInfoController {
-    @discardableResult
     public func create(
         on transactor: Transactor? = nil,
         @OTOChainRelationBuilder<UUID, PUserInfo, PExtendedInfo>

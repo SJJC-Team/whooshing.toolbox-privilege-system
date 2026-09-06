@@ -829,7 +829,7 @@ public extension PrivilegeModule.PPrivilege {
             id: id,
             name: name,
             summary: summary,
-            policy: policy
+            policy: policy.policy
         )
     }
     
