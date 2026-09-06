@@ -665,6 +665,27 @@ public struct UserPolicyFields: Sendable {
     }
 }
 
+/// 用户字段（`QRole` 编码后的形状）。
+public struct RolePolicyFields: Sendable {
+    public let path: String
+
+    public init(_ path: String) {
+        self.path = path
+    }
+
+    public var id: PolicyField<UUID> { .init(path + ".id") }
+    public var name: PolicyField<String> { .init(path + ".name") }
+    public var summary: PolicyField<String> { .init(path + ".summary") }
+    public var createdAt: DatePolicyField { .init(path + ".created_at") }
+    public var updatedAt: DatePolicyField { .init(path + ".updated_at") }
+
+    /// 逃生舱口：以动态 JSON 字段访问编码后的任意路径。
+    public subscript(_ key: String) -> JSONPolicyField {
+        JSONPolicyField(path)[key]
+    }
+}
+
+
 /// 群组字段（`QGroup` 编码后的形状）。
 public struct GroupPolicyFields: Sendable {
     public let path: String
@@ -696,6 +717,7 @@ public struct RolePolicyInput: PolicyInput {
     public let roleId = PolicyField<UUID>("input.roleId")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
+    public let role = RolePolicyFields("input.role")
     public let resource = JSONPolicyField("input.resource")
 
     public init() {}
@@ -706,6 +728,7 @@ public struct DomainPolicyInput: PolicyInput {
     public let domainId = PolicyField<UUID>("input.domainId")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
+    public let role = RolePolicyFields("input.role")
     /// 该域经由哪个群组授予；用户直接被授予时为 null。
     public let group = GroupPolicyFields("input.group")
     public let resource = JSONPolicyField("input.resource")
@@ -718,6 +741,7 @@ public struct PrivilegePolicyInput: PolicyInput {
     public let privilegeId = PolicyField<UUID>("input.privilegeId")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
+    public let role = RolePolicyFields("input.role")
     public let resource = JSONPolicyField("input.resource")
 
     public init() {}

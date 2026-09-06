@@ -110,11 +110,15 @@ extension PrivilegeSystem {
                 self.db.eventLoop.makeFailedResult(Errcase.arbitrationDataCollectFailed, "所提供的身份并未被任命与用户", metadata: ["user": .data(user), "role": .data(role)], category: .external(suggestions: ["身份必须已任命与 \(user.email)"], userdata: .init(HTTPResponseStatus.forbidden)))
             }.flatMap {
                 user.model(from: self.db).errCast(Errcase.arbitrationDataCollectFailed, "User 模型取得失败", category: .internal)
-            }.flatMap {
+            }.flatMap { user in
+                role.model(from: self.db).errCast(Errcase.arbitrationDataCollectFailed, "Role 模型取得失败", category: .internal).map {
+                    (user, $0)
+                }
+            }.flatMap { user, role in
                 self.__judge(
                     moduleId: moduleId,
-                    user: $0,
-                    roleId: role.id,
+                    user: user,
+                    role: role,
                     resource: resource,
                     operation: operation,
                     privilegeIds: privilegeIds,
@@ -201,8 +205,23 @@ extension PrivilegeSystem {
                     }
                     return self.db.eventLoop.makeSucceededResult(u)
                 }
-            }.flatMap {
-                self.__judge(moduleId: moduleId, user: $0, roleId: roleId, resource: resource, operation: operation, privilegeIds: privilegeIds, logger: logger)
+            }.flatMap { user in
+                // 从数据库中取得 User 模型
+                __SDBM.Role.query(on: self.db)
+                    .filter(\.$id == roleId)
+                    .first()
+                    .withError(Errcase.arbitrationDataCollectFailed, "取得 Role 主模型失败", metadata: ["id": .stringConvertible(roleId)], category: .internal)
+                    .flatMap
+                { role in
+                    guard let r = role else {
+                        return self.db.eventLoop.makeFailedResult(Errcase.arbitrationDataCollectFailed, "要仲裁的用户角色不存在", metadata: ["id": .stringConvertible(roleId)], category: .external(suggestions: ["请提供有效的用户登陆角色身份"], userdata: .init(HTTPResponseStatus.notFound)))
+                    }
+                    return self.db.eventLoop.makeSucceededResult(r)
+                }.map {
+                    (user, $0)
+                }
+            }.flatMap { user, role in
+                self.__judge(moduleId: moduleId, user: user, role: role, resource: resource, operation: operation, privilegeIds: privilegeIds, logger: logger)
             }.map { res in
                 logger.info("权限仲裁 操作执行成功", metadata: ["result": .summaryData(res)])
                 logger.debug("仲裁结果", metadata: ["result": .data(res)])
@@ -218,7 +237,7 @@ extension PrivilegeSystem {
         func __judge(
             moduleId: UUID,
             user: __SDBM.User,
-            roleId: UUID,
+            role: __SDBM.Role,
             resource: AnyResource,
             operation: AnyOperation,
             privilegeIds: OrderedSet<UUID>,
@@ -226,13 +245,19 @@ extension PrivilegeSystem {
         ) -> EventLoopRes<Result, Errcase> {
             
             let userGetter = db.eventLoop.submitResult { () throws(Errcase.ErrType) in
-                try required(throws: Errcase.arbitrationDataCollectFailed, "创建 User DTO 数据失败", category: .internal) {
+                let u = try required(throws: Errcase.arbitrationDataCollectFailed, "创建 User DTO 数据失败", category: .internal) {
                     try QUser.make(from: user).get()
                 }
+                
+                let r = try required(throws: Errcase.arbitrationDataCollectFailed, "创建 Role DTO 数据失败", category: .internal) {
+                    try QRole.make(from: role).get()
+                }
+                
+                return (u, r)
             }
             
             // 查询用户所在的群组，父群组的所有域权限
-            let groupDomainPolicies: EventLoopRes<[DomainData], Errcase> = userGetter.flatMap { userDTO in
+            let groupDomainPolicies: EventLoopRes<[DomainData], Errcase> = userGetter.flatMap { userDTO, roleDTO in
                 user.$groups.query(on: self.db)
                     .with(\.$supers) { path in
                         path.with(\.$ancestor)
@@ -276,6 +301,7 @@ extension PrivilegeSystem {
                                     resource: resource.json,
                                     operation: operation.rawValue,
                                     user: userDTO,
+                                    role: roleDTO,
                                     group: .make(from: associatedGroup).get()
                                 )
                             }
@@ -285,7 +311,7 @@ extension PrivilegeSystem {
             }
             
             // 查询用户本身被赋予的域权限
-            let userDomainPolicies: EventLoopRes<[DomainData], Errcase> = userGetter.flatMap { userDTO in
+            let userDomainPolicies: EventLoopRes<[DomainData], Errcase> = userGetter.flatMap { userDTO, roleDTO in
                 user.$domains.get(on: self.db)
                     .withError(Errcase.arbitrationDataCollectFailed, "数据库加载用户域权限失败", category: .internal)
                     .flatMapThrowing
@@ -297,6 +323,7 @@ extension PrivilegeSystem {
                                 resource: resource.json,
                                 operation: operation.rawValue,
                                 user: userDTO,
+                                role: roleDTO,
                                 group: nil
                             )
                         }
@@ -305,7 +332,7 @@ extension PrivilegeSystem {
             }
             
             // 查询该用户所有的域权限，包括其所在的群组，父群组的所有域权限，及其本身被赋予的域权限
-            return userGetter.flatMap { userDTO in
+            return userGetter.flatMap { userDTO, roleDTO in
                 [groupDomainPolicies, userDomainPolicies]
                     .flatten(on: self.db.eventLoop)
                     .flatMap
@@ -315,17 +342,18 @@ extension PrivilegeSystem {
                             moduleId: moduleId,
                             domains: .init(domainDatas.flatMap { $0 }),
                             role: .init(
-                                roleId: roleId,
                                 resource: resource.json,
                                 operation: operation.rawValue,
-                                user: userDTO
+                                user: userDTO,
+                                role: roleDTO
                             ),
                             privileges: privilegeIds.mapToSet {
                                 .init(
                                     privilegeId: $0,
                                     resource: resource.json,
                                     operation: operation.rawValue,
-                                    user: userDTO
+                                    user: userDTO,
+                                    role: roleDTO
                                 )
                             }
                         ), logger: logger
@@ -350,13 +378,13 @@ extension PrivilegeSystem {
                 return (id, roleJson)
             }.flatMap { (id, json) in
                 self.opa.query.data(
-                    from: "/rules" + policyPath(moduleId: input.moduleId, modelId: input.role.roleId, type: Role.self, format: .path) + "/allow",
+                    from: "/rules" + policyPath(moduleId: input.moduleId, modelId: input.role.role.id, type: Role.self, format: .path) + "/allow",
                     input: json,
                     to: Bool.self
                 ).errCast(Errcase.arbitrateFailed, "OPA Query 用户身份 失败", category: .internal)
                 .map { res in
                     logger.debug("Role 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(id)])
-                    return (Result.IdKey(type: .role, moduleId: input.moduleId, id: input.role.roleId), res)
+                    return (Result.IdKey(type: .role, moduleId: input.moduleId, id: input.role.role.id), res)
                 }
             }
             
@@ -557,7 +585,7 @@ extension PrivilegeSystem.Arbitrator {
         
         var description: String {
             formatJson([
-                "moduleId": AnyCodable(moduleId),
+                "module_id": AnyCodable(moduleId),
                 "domains": AnyCodable(domains),
                 "role": AnyCodable(role),
                 "privileges": AnyCodable(privileges)
@@ -566,17 +594,17 @@ extension PrivilegeSystem.Arbitrator {
     }
     
     struct RoleData: Hashable, Encodable, Sendable, CustomStringConvertible, Loggerable, DateWrapperModel {
-        let roleId: UUID
         let resource: [String: AnyCodable]
         let operation: String
         let user: QUser
+        let role: QRole
         
         var description: String {
             formatJson([
-                "roleId": AnyCodable(roleId),
                 "resource": AnyCodable(resource),
                 "operation": AnyCodable(operation),
-                "user": AnyCodable(user)
+                "user": AnyCodable(user),
+                "role": AnyCodable(role)
             ])
         }
     }
@@ -586,14 +614,16 @@ extension PrivilegeSystem.Arbitrator {
         let resource: [String: AnyCodable]
         let operation: String
         let user: QUser
+        let role: QRole
         let group: QGroup?
         
         var description: String {
             formatJson([
-                "domainId": AnyCodable(domainId),
+                "domain_id": AnyCodable(domainId),
                 "resource": AnyCodable(resource),
                 "operation": AnyCodable(operation),
                 "user": AnyCodable(user),
+                "role": AnyCodable(role),
                 "group": AnyCodable(group)
             ])
         }
@@ -604,13 +634,15 @@ extension PrivilegeSystem.Arbitrator {
         let resource: [String: AnyCodable]
         let operation: String
         let user: QUser
+        let role: QRole
         
         var description: String {
             formatJson([
-                "privilegeId": AnyCodable(privilegeId),
+                "privilege_id": AnyCodable(privilegeId),
                 "resource": AnyCodable(resource),
                 "operation": AnyCodable(operation),
-                "user": AnyCodable(user)
+                "user": AnyCodable(user),
+                "role": AnyCodable(role)
             ])
         }
     }
