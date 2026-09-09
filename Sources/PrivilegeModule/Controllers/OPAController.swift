@@ -83,7 +83,7 @@ package extension OPAController {
                             // id 为 opa 路径，content 为 策略规则内容
                             for (i, (id, content)) in opaPolicyData.enumerated() {
                                 group.addTask {
-                                    _ = try await required(throws: errThrowing, "\(policyType) 类型 OPA \(label)策略插入失败", category: .internal) {
+                                    _ = try await required(throws: errThrowing, "\(policyType) 类型 OPA \(label)策略插入失败", category: .inherit) {
                                         try await self.opa.policy.save(by: id, content: content)
                                     }
                                     
@@ -96,7 +96,7 @@ package extension OPAController {
                         
                         target.succeed()
                     } catch let err {
-                        let error = errThrowing.d("\(policyType) 类型 OPA \(label)策略并行任务时插入失败", category: .internal).subErr(err)
+                        let error = errThrowing.d("\(policyType) 类型 OPA \(label)策略并行任务时插入失败", category: .inherit).subErr(err)
                         target.fail(error)
                     }
                 }

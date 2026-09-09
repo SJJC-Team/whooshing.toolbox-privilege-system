@@ -480,7 +480,17 @@ extension PrivilegeSystem {
                 var result = Result(result: true, reports: [:])
                 for (k, r) in res {
                     guard let r = r.result else {
-                        return self.eventLoop.makeFailedResult(Errcase.arbitrateFailed, "OPA 查询异常，Path 路径未找到", category: .internal)
+                        return self.eventLoop.makeFailedResult(
+                            Errcase.arbitrateFailed,
+                            "OPA 查询异常，路径未找到",
+                            metadata: [
+                                "module_id": .stringConvertible(k.moduleId),
+                                "model_id": k.modelId == nil ? .string("nil") : .stringConvertible(k.modelId!),
+                                "policy_id": .stringConvertible(k.policyId),
+                                "type": .stringConvertible(k.type)
+                            ],
+                            category: .external(suggestions: ["请提供正确的策略路经"], userdata: .init(HTTPResponseStatus.unauthorized))
+                        )
                     }
                     result.and(result: r)
                     result.append(id: k, value: r)
@@ -538,13 +548,21 @@ extension PrivilegeSystem.Arbitrator {
         /// 仲裁报告中一条策略结果的唯一键。
         public struct IdKey: Sendable, Hashable {
             /// 策略所属类别。
-            public enum T: Sendable, Hashable {
+            public enum T: Sendable, Hashable, CustomStringConvertible, Loggerable {
                 /// 角色策略。
                 case role
                 /// 域策略。
                 case domain
                 /// 资源权限策略。
                 case privilege
+                
+                public var description: String {
+                    switch self {
+                    case .role: "role"
+                    case .domain: "domain"
+                    case .privilege: "privilege"
+                    }
+                }
             }
             /// 策略类别。
             public let type: T
@@ -618,6 +636,13 @@ extension PrivilegeSystem.Arbitrator {
         let role: RoleData
         let privileges: OrderedSet<PrivilegeData>
         
+        enum CodingKeys: String, CodingKey {
+            case moduleId = "module_id"
+            case domains
+            case role
+            case privileges
+        }
+        
         var description: String {
             formatJson([
                 "module_id": AnyCodable(moduleId),
@@ -634,6 +659,14 @@ extension PrivilegeSystem.Arbitrator {
         let operation: String
         let user: QUser
         let role: QRole
+        
+        enum CodingKeys: String, CodingKey {
+            case policyIds = "policy_ids"
+            case resource
+            case operation
+            case user
+            case role
+        }
         
         var description: String {
             formatJson([
@@ -655,6 +688,16 @@ extension PrivilegeSystem.Arbitrator {
         let role: QRole
         let group: QGroup?
         
+        enum CodingKeys: String, CodingKey {
+            case domainId = "domain_id"
+            case policyId = "policy_id"
+            case resource
+            case operation
+            case user
+            case role
+            case group
+        }
+        
         var description: String {
             formatJson([
                 "domain_id": AnyCodable(domainId),
@@ -674,6 +717,14 @@ extension PrivilegeSystem.Arbitrator {
         let operation: String
         let user: QUser
         let role: QRole
+        
+        enum CodingKeys: String, CodingKey {
+            case privilegeId = "privilege_id"
+            case resource
+            case operation
+            case user
+            case role
+        }
         
         var description: String {
             formatJson([
