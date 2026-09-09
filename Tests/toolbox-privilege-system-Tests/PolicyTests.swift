@@ -1364,7 +1364,6 @@ struct PolicyTesting {
         let (s, m) = try await TestingShared.getSystem()
         let user = try await fetchUser(index: 4, s: s)
         let role = try await fetchRole(index: 6, s: s) // RT[6]: allow if {true}
-        let rolePolicy = try #require(try await fetchRolePolicy(index: 6, s: s).first)
         let suffix = UUID().uuidString
 
         let privileges = try await m.privilege.createWithReturning(privileges: [
