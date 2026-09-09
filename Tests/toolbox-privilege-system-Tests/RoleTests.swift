@@ -15,6 +15,7 @@ struct RoleTesting {
     }
     
     nonisolated(unsafe) static var ids: OrderedSet<UUID> = []
+    nonisolated(unsafe) static var policyIds: [[UUID]] = []
     
     static let roles: OrderedSet<PRole> = [
         .init(name: "SuperAdminRole", summary: "拥有全局控制面板访问权限"),
@@ -95,6 +96,7 @@ struct RoleTesting {
         #expect(try await s.origin.query(QRole.self).filter(\.id != BasicRoleCreatesTesting.nobodyRoleId).count() == Self.roles.count)
         
         Self.ids = []
+        Self.policyIds = []
         for roleParam in Self.roles {
             let u = try #require(
                 try await s.origin.query(QRole.self)
@@ -120,10 +122,17 @@ struct RoleTesting {
                 moduleId: m.moduleId,
                 policy: policyString
             )
-            _ = try await s.policy.create(to: Role.self) {
+            
+            let policies = try await s.policy.createWithReturning(to: Role.self) {
                 OrderedSet([policy]) => role.id
             }
+            
+            let ps = try #require(policies[role.id])
+            
+            Self.policyIds.append(ps.map { $0.id })
         }
+        
+        #expect(Self.policyIds.count == Self.ids.count)
     }
     
     @Test("验证角色策略是否成功添加")
@@ -131,7 +140,6 @@ struct RoleTesting {
         let (s, _) = try await TestingShared.getSystem()
         let allRoles = try await s.origin.query(QRole.self).all()
         let roles = Self.ids.compactMap { id in allRoles.first(where: { $0.id == id }) }
-        
         for role in roles {
             let policies = try await __SDBM.PolicyExp<Role>.query(on: s.pgDB)
                 .filter(\.$parent.$id == role.id)

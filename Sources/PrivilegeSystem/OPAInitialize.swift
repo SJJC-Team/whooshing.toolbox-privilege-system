@@ -6,7 +6,7 @@ extension PrivilegeSystem {
         let rolePolicies = try await logger.required(throws: Errcase.opaInitFailed, "从数据库查询角色权限数据失败", category: .internal) {
             try await __SDBM.RolePolicy.query(on: pgDB).all().map {
                 (
-                    policyPath(moduleId: $0.moduleId, modelId: $0.$parent.id, type: Role.self, format: .route),
+                    policyPath(moduleId: $0.moduleId, modelId: $0.$parent.id, policyId: try $0.requireID(), type: Role.self, format: .route),
                     $0.policy
                 )
             }
@@ -15,7 +15,7 @@ extension PrivilegeSystem {
         let domainPolicies = try await logger.required(throws: Errcase.opaInitFailed, "从数据库查询域权限数据失败", category: .internal) {
             try await __SDBM.DomainPolicy.query(on: pgDB).all().map {
                 (
-                    policyPath(moduleId: $0.moduleId, modelId: $0.$parent.id, type: Domain.self, format: .route),
+                    policyPath(moduleId: $0.moduleId, modelId: $0.$parent.id, policyId: try $0.requireID(), type: Domain.self, format: .route),
                     $0.policy
                 )
             }

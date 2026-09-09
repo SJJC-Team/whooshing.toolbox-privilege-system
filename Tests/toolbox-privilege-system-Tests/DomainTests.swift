@@ -15,6 +15,7 @@ struct DomainTesting {
     }
     
     nonisolated(unsafe) static var ids: OrderedSet<UUID> = []
+    nonisolated(unsafe) static var policyIds: [[UUID]] = []
     
     static let domains: OrderedSet<PDomain> = [
         .init(name: "GlobalScope", summary: "全系统顶级域，可以影响所有资源"),
@@ -89,6 +90,7 @@ struct DomainTesting {
         #expect(try await s.origin.query(QDomain.self).count() == Self.domains.count)
         
         Self.ids = []
+        Self.policyIds = []
         for domainParam in Self.domains {
             let u = try #require(
                 try await s.origin.query(QDomain.self)
@@ -114,10 +116,16 @@ struct DomainTesting {
                 moduleId: m.moduleId,
                 policy: policyString
             )
-            _ = try await s.policy.create(to: Domain.self) {
+            let policies = try await s.policy.createWithReturning(to: Domain.self) {
                 OrderedSet([policy]) => domain.id
             }
+            
+            let ps = try #require(policies[domain.id])
+            
+            Self.policyIds.append(ps.map { $0.id })
         }
+        
+        #expect(Self.policyIds.count == Self.ids.count)
     }
     
     @Test("验证域策略是否成功添加")

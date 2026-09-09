@@ -1,5 +1,6 @@
 import Query
 import Foundation
+import NIOHTTP1
 import PrivilegeModule
 
 extension PrivilegeSystem {
@@ -114,36 +115,50 @@ public extension PrivilegeSystem.UserInfoController {
         let db = transactor?.db ?? self.db
         return db.trans(throws: .userInfoCreateFailed, "数据库事务执行失败", category: .internal) { db in
             let infos = relations.map { $0.right.left.raw(for: $0.left) }
-            return infos
-                .create(on: db)
-                .withError(PrivilegeSystem.Errcase.userInfoCreateFailed, "数据库执行创建失败", category: .internal)
+            
+            return __SDBM.User.Info.query(on: db)
+                .filter(\.$user.$id ~~ infos.map { $0.$user.id })
+                .with(\.$user)
+                .all()
+                .withError(PrivilegeSystem.Errcase.userInfoCreateFailed, "数据库查询 UserInfo 失败", category: .internal)
                 .flatMap
-            { _ in
-                relations.enumerated().flatMap { (i, relation) in
-                    [
-                        self.infoSliceController.__create(
-                            on: db,
-                            for: try! infos[i].requireID(),
-                            extendedInfos: relation.right.right.addresses
-                        ).map { _ in },
-                        
-                        self.infoSliceController.__create(
-                            on: db,
-                            for: try! infos[i].requireID(),
-                            extendedInfos: relation.right.right.alternateEmails
-                        ).map { _ in },
-                        
-                        self.infoSliceController.__create(
-                            on: db,
-                            for: try! infos[i].requireID(),
-                            extendedInfos: relation.right.right.phones
-                        ).map { _ in }
-                    ]
+            { dbInfos in
+                guard dbInfos.isEmpty else {
+                    return db.eventLoop.makeFailedResult(PrivilegeSystem.Errcase.userInfoCreateFailed, "用户信息 \"\(dbInfos.map { $0.user.email }.joined(separator: "\", \""))\" 已经存在，创建失败", category: .external(suggestions: ["一个用户仅允许创建一个用户信息", "请考虑更新而非创建"], userdata: .init(HTTPResponseStatus.conflict)))
                 }
-                .flatten(on: db.eventLoop)
+                return db.eventLoop.makeSucceededVoidResult()
+            }.flatMap {
+                infos
+                    .create(on: db)
+                    .withError(PrivilegeSystem.Errcase.userInfoCreateFailed, "数据库执行创建失败", category: .internal)
+                    .flatMap
+                {
+                    relations.enumerated().flatMap { (i, relation) in
+                        [
+                            self.infoSliceController.__create(
+                                on: db,
+                                for: try! infos[i].requireID(),
+                                extendedInfos: relation.right.right.addresses
+                            ).map { _ in },
+                            
+                            self.infoSliceController.__create(
+                                on: db,
+                                for: try! infos[i].requireID(),
+                                extendedInfos: relation.right.right.alternateEmails
+                            ).map { _ in },
+                            
+                            self.infoSliceController.__create(
+                                on: db,
+                                for: try! infos[i].requireID(),
+                                extendedInfos: relation.right.right.phones
+                            ).map { _ in }
+                        ]
+                    }
+                    .flatten(on: db.eventLoop)
+                }
             }
         }
-        .map { _ in logger.info("创建用户信息 操作成功") }
+        .map { logger.info("创建用户信息 操作成功") }
         .logIfFail(logger: logger)
     }
 }

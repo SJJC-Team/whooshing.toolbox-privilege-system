@@ -21,5 +21,6 @@ public extension PrivilegeModuleExtended {
         case infoSliceDTORawCreateFailed = "用户扩展信息数据 DTO 创建失败"
         
         case tokenVerifyFailed = "用户口令验证失败"
+        case roleNameIlligel = "角色名称非法"
     }
 }

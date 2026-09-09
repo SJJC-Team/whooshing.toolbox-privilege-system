@@ -201,15 +201,26 @@ extension QRole: Query.Queriable {
 // MARK: - Updater
 
 public extension PRole {
-    struct Updater: @unchecked Sendable {
+    class Updater: @unchecked Sendable {
         public let roleId: UUID
         package var id: UUID { roleId }
+        package var reservedRoleNames: [String]? {
+            get {
+                lock.withLock { __reservedRoleNames }
+            }
+            set {
+                lock.withLock { __reservedRoleNames = newValue }
+            }
+        }
         
-        package let updates: OrderedDictionary<
+        private var __reservedRoleNames: [String]? = nil
+        private let lock = NIOLock()
+        
+        package private(set) var updates: OrderedDictionary<
             PartialKeyPath<PRole>,
             (QueryBuilder<__SDBM.Role>, QRole?) throws -> QueryBuilder<__SDBM.Role>
         >
-        package let needsPeek: Bool
+        package private(set) var needsPeek: Bool
         
         public init(roleId: UUID) {
             self.roleId = roleId
@@ -217,7 +228,7 @@ public extension PRole {
             self.needsPeek = false
         }
         
-        package init(
+        required package init(
             id: UUID,
             updates: OrderedDictionary<
                 PartialKeyPath<PRole>,
@@ -236,31 +247,62 @@ extension PRole.Updater: DTOUpdater {}
 
 public extension PRole.Updater {
     func update(name: @escaping @autoclosure () throws -> String) -> Self {
-        generate(key: \.name) { builder, _ in
-            builder.set(\.$name, to: try name())
+        updates[\.name] = { builder, _ in
+            let roleName = try name()
+            
+            guard let rNames = self.reservedRoleNames else {
+                throw PrivilegeModuleExtended.Errcase.roleNameIlligel.d("业务流程出错，角色名称保留字 reservedRoleNames 未设置", category: .internal)
+            }
+            guard !rNames.contains(roleName) else {
+                throw PrivilegeModuleExtended.Errcase.roleNameIlligel.d("\"\(roleName)\" 为角色保留名，不可作为角色名", category: .external(suggestions: ["请选择非保留字的名称作为角色名称"], userdata: .init(HTTPResponseStatus.unprocessableEntity)))
+            }
+            
+            return builder.set(\.$name, to: roleName)
         }
+        
+        return self
     }
     
     func update(summary: @escaping @autoclosure () throws -> String?) -> Self {
-        generate(key: \.summary) { builder, _ in
+        updates[\.name] = { builder, _ in
             builder.set(\.$summary, to: try summary())
         }
+        
+        return self
     }
 }
 
 public extension PRole.Updater {
     func update(name: @escaping (QRole) throws -> String) -> Self {
-        generate(needsPeek: true, key: \.name) { builder, query in
+        updates[\.name] = { builder, query in
             guard let q = query else { fatalError("应当提供 Query 结果，却没有提供") }
-            return builder.set(\.$name, to: try name(q))
+            
+            let roleName = try name(q)
+            
+            guard let rNames = self.reservedRoleNames else {
+                throw PrivilegeModuleExtended.Errcase.roleNameIlligel.d("业务流程出错，角色名称保留字 reservedRoleNames 未设置", category: .internal)
+            }
+            guard !rNames.contains(roleName) else {
+                throw PrivilegeModuleExtended.Errcase.roleNameIlligel.d("\"\(roleName)\" 为角色保留名，不可作为角色名", category: .external(suggestions: ["请选择非保留字的名称作为角色名称"], userdata: .init(HTTPResponseStatus.unprocessableEntity)))
+            }
+            
+            return builder.set(\.$name, to: roleName)
         }
+        
+        self.needsPeek = true
+        
+        return self
     }
     
     func update(summary: @escaping (QRole) throws -> String?) -> Self {
-        generate(needsPeek: true, key: \.summary) { builder, query in
+        updates[\.summary] = { builder, query in
             guard let q = query else { fatalError("应当提供 Query 结果，却没有提供") }
             return builder.set(\.$summary, to: try summary(q))
         }
+        
+        self.needsPeek = true
+        
+        return self
     }
 }
 

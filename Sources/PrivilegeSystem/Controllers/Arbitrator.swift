@@ -266,44 +266,55 @@ extension PrivilegeSystem {
                     .withError(Errcase.arbitrationDataCollectFailed, "取得用户所加入的所有群组失败", category: .internal)
                     .flatMapThrowing
                 { (groups: [__SDBM.Group]) throws(Errcase.ErrType) in
-                    let gs = [__SDBM.Group]((
+                    let gsList = [__SDBM.Group]((
                         groups +
                         groups.flatMap { $0.supers.map { $0.ancestor } }
                     ).uniqued())
-                    
-                    let ids = try required(throws: Errcase.arbitrateFailed, "取得群组 ID 失败", category: .internal) {
-                        try gs.compactMap { try $0.requireID() }
+
+                    let gsDict: [UUID: __SDBM.Group] = try required(throws: Errcase.arbitrateFailed, "取得群组 ID 失败", category: .internal) {
+                        try Dictionary(uniqueKeysWithValues: gsList.map { (try $0.requireID(), $0) })
                     }
-                    
-                    return (gs, ids)
-                }.flatMap { (groups: [__SDBM.Group], groupIds: [UUID]) in
-                    guard !groupIds.isEmpty else {
+
+                    return gsDict
+                }.flatMap { (groups: [UUID: __SDBM.Group]) in
+                    guard !groups.isEmpty else {
                         return self.db.eventLoop.makeSucceededResult([])
                     }
                     
-                    return __SDBM.DomainGroupPivot.query(on: self.db)
-                        .filter(\.$secondaryModel.$id ~~ groupIds) // groups
-                        .with(\.$primaryModel)  // domains
+                    return __SDBM.DomainPolicy.query(on: self.db)
+                        .join(__SDBM.DomainGroupPivot.self, on: \__SDBM.DomainPolicy.$parent.$id == \__SDBM.DomainGroupPivot.$primaryModel.$id)
+                        .filter(__SDBM.DomainGroupPivot.self, \.$secondaryModel.$id ~~ Array(groups.keys))
+                        .field(\.$id)
+                        .field(\.$parent.$id)
+                        .field(__SDBM.DomainGroupPivot.self, \.$id)
+                        .field(__SDBM.DomainGroupPivot.self, \.$primaryModel.$id)
+                        .field(__SDBM.DomainGroupPivot.self, \.$secondaryModel.$id)
                         .all()
                         .withError(Errcase.arbitrationDataCollectFailed, "取得 Domain Pivot 数据失败", category: .internal)
                         .flatMapThrowing
-                    { pivots throws(Errcase.ErrType) in
-                        try required(throws: Errcase.arbitrationDataCollectFailed, "取得 Domain 数据失败", category: .internal) {
-                            // 内存装配：此时每一行 pivot 都天然维护了 [Group -> Domain] 的纽带关系
-                            try pivots.map { pivot in
+                    { policies throws(Errcase.ErrType) in
+                        try required(throws: Errcase.arbitrationDataCollectFailed, "取得 Domain 数据失败", category: .inherit) {
+                            try policies.map { policy in
+                                let pivot = try required(throws: Errcase.arbitrationDataCollectFailed, "取得 DomainGroupPivot 数据失败", category: .internal) {
+                                    try policy.joined(__SDBM.DomainGroupPivot.self)
+                                }
+                                
                                 // 从最开始传入的 groups 内存集合里，凭借 pivot 的 groupId 瞬间定位到完整的 __SDBM.Group 实体
-                                guard let associatedGroup = groups.first(where: { $0.id == pivot.$secondaryModel.id }) else {
+                                guard let associatedGroup = groups[pivot.$secondaryModel.id] else {
                                     throw Errcase.arbitrationDataCollectFailed.d("群组数据映射丢失", category: .internal)
                                 }
                                 
-                                return try DomainData(
-                                    domainId: pivot.primaryModel.requireID(),
-                                    resource: resource.json,
-                                    operation: operation.rawValue,
-                                    user: userDTO,
-                                    role: roleDTO,
-                                    group: .make(from: associatedGroup).get()
-                                )
+                                return try required(throws: Errcase.arbitrationDataCollectFailed, "Domain 数据装配失败", category: .inherit) {
+                                    try DomainData(
+                                        domainId: policy.$parent.id,
+                                        policyId: policy.requireID(),
+                                        resource: resource.json,
+                                        operation: operation.rawValue,
+                                        user: userDTO,
+                                        role: roleDTO,
+                                        group: .make(from: associatedGroup).get()
+                                    )
+                                }
                             }
                         }
                     }
@@ -312,14 +323,21 @@ extension PrivilegeSystem {
             
             // 查询用户本身被赋予的域权限
             let userDomainPolicies: EventLoopRes<[DomainData], Errcase> = userGetter.flatMap { userDTO, roleDTO in
-                user.$domains.get(on: self.db)
+                __SDBM.DomainPolicy.query(on: self.db)
+                    .join(__SDBM.UserDomainPivot.self, on: \__SDBM.DomainPolicy.$parent.$id == \__SDBM.UserDomainPivot.$secondaryModel.$id)
+                    .filter(__SDBM.UserDomainPivot.self, \.$primaryModel.$id == userDTO.id)
+                    .field(\.$id)
+                    .field(\.$parent.$id)
+                    .unique()
+                    .all()
                     .withError(Errcase.arbitrationDataCollectFailed, "数据库加载用户域权限失败", category: .internal)
                     .flatMapThrowing
-                { domains throws(Errcase.ErrType) in
+                { policies throws(Errcase.ErrType) in
                     try required(throws: Errcase.arbitrationDataCollectFailed, "取得 Domain 数据失败", category: .internal) {
-                        try domains.map { domain in
+                        try policies.map { policy in
                             try DomainData(
-                                domainId: domain.requireID(),
+                                domainId: policy.$parent.id,
+                                policyId: policy.requireID(),
                                 resource: resource.json,
                                 operation: operation.rawValue,
                                 user: userDTO,
@@ -337,27 +355,39 @@ extension PrivilegeSystem {
                     .flatten(on: self.db.eventLoop)
                     .flatMap
                 { domainDatas in
-                    self.__judge(
-                        input: ArbitrateData(
-                            moduleId: moduleId,
-                            domains: .init(domainDatas.flatMap { $0 }),
-                            role: .init(
-                                resource: resource.json,
-                                operation: operation.rawValue,
-                                user: userDTO,
-                                role: roleDTO
-                            ),
-                            privileges: privilegeIds.mapToSet {
-                                .init(
-                                    privilegeId: $0,
+                    __SDBM.RolePolicy.query(on: self.db)
+                        .filter(\.$parent.$id == roleDTO.id)
+                        .all()
+                        .withError(Errcase.arbitrationDataCollectFailed, "从数据库中取得 Role 的 policy 列表失败", category: .inherit)
+                        .flatMapThrowing
+                    { rolePolicies throws(Errcase.ErrType) in
+                        try required(throws: Errcase.arbitrationDataCollectFailed, "取得 Role 的 id 失败", category: .internal) {
+                            try rolePolicies.map { try $0.requireID() }
+                        }
+                    }.flatMap { policyIds in
+                        self.__judge(
+                            input: ArbitrateData(
+                                moduleId: moduleId,
+                                domains: .init(domainDatas.flatMap { $0 }),
+                                role: .init(
+                                    policyIds: .init(policyIds),
                                     resource: resource.json,
                                     operation: operation.rawValue,
                                     user: userDTO,
                                     role: roleDTO
-                                )
-                            }
-                        ), logger: logger
-                    )
+                                ),
+                                privileges: privilegeIds.mapToSet {
+                                    .init(
+                                        privilegeId: $0,
+                                        resource: resource.json,
+                                        operation: operation.rawValue,
+                                        user: userDTO,
+                                        role: roleDTO
+                                    )
+                                }
+                            ), logger: logger
+                        )
+                    }
                 }
             }
         }
@@ -367,48 +397,50 @@ extension PrivilegeSystem {
             logger: Logger
         ) -> EventLoopRes<Result, Errcase> {
             // 取得用户身份的 policy
-            let roleAuth = eventLoop.submitResult { () throws(Errcase.ErrType) in
-                let id = UUID()
-                logger.debug("进行 Role 仲裁", metadata: ["role": .data(input.role), "arbitrate-id": .stringConvertible(id)])
-                
-                let roleJson = try required(throws: Errcase.arbitrateFailed, "将角色数据转为 Json 失败", category: .internal) {
-                    try input.role.wrappedJson()
-                }
-                
-                return (id, roleJson)
-            }.flatMap { (id, json) in
-                self.opa.query.data(
-                    from: "/rules" + policyPath(moduleId: input.moduleId, modelId: input.role.role.id, type: Role.self, format: .path) + "/allow",
-                    input: json,
-                    to: Bool.self
-                ).errCast(Errcase.arbitrateFailed, "OPA Query 用户身份 失败", category: .internal)
-                .map { res in
-                    logger.debug("Role 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(id)])
-                    return (Result.IdKey(type: .role, moduleId: input.moduleId, id: input.role.role.id), res)
+            let rolesAuth = input.role.policyIds.map { policyId in
+                eventLoop.submitResult { () throws(Errcase.ErrType) in
+                    let arbiId = UUID()
+                    logger.debug("进行 Role 仲裁", metadata: ["role": .data(input.role), "arbitrate-id": .stringConvertible(arbiId)])
+                    
+                    let roleJson = try required(throws: Errcase.arbitrateFailed, "将角色数据转为 Json 失败", category: .internal) {
+                        try input.role.wrappedJson()
+                    }
+                    
+                    return (arbiId, roleJson)
+                }.flatMap { (arbiId, json) in
+                    self.opa.query.data(
+                        from: "/rules" + policyPath(moduleId: input.moduleId, modelId: input.role.role.id, policyId: policyId, type: Role.self, format: .path) + "/allow",
+                        input: json,
+                        to: Bool.self
+                    ).errCast(Errcase.arbitrateFailed, "OPA Query 用户身份 失败", category: .internal)
+                    .map { res in
+                        logger.debug("Role 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(arbiId)])
+                        return (Result.IdKey(type: .role, moduleId: input.moduleId, modelId: input.role.role.id, policyId: policyId), res)
+                    }
                 }
             }
             
             // 取得所有域权限的 policy
             let domainsAuth = input.domains.map { domainData in
                 eventLoop.submitResult { () throws(Errcase.ErrType) in
-                    let id = UUID()
-                    logger.debug("进行 Domain 仲裁", metadata: ["domain": .data(domainData), "arbitrate-id": .stringConvertible(id)])
+                    let arbiId = UUID()
+                    logger.debug("进行 Domain 仲裁", metadata: ["domain": .data(domainData), "arbitrate-id": .stringConvertible(arbiId)])
                     
                     let domainJson = try required(throws: Errcase.arbitrateFailed, "将域数据转为 Json 失败", category: .internal) {
                         try domainData.wrappedJson()
                     }
                     
-                    return (id, domainJson)
-                }.flatMap { (id, json) in
+                    return (arbiId, domainJson)
+                }.flatMap { (arbiId, json) in
                     self.opa.query.data(
-                        from: "/rules" + policyPath(moduleId: input.moduleId, modelId: domainData.domainId, type: Domain.self, format: .path) + "/allow",
+                        from: "/rules" + policyPath(moduleId: input.moduleId, modelId: domainData.domainId, policyId: domainData.policyId, type: Domain.self, format: .path) + "/allow",
                         input: json,
                         to: Bool.self
                     )
                     .errCast(Errcase.arbitrateFailed, "OPA Query 域权限 失败", category: .internal)
                     .map { res in
-                        logger.debug("Domain 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(id)])
-                        return (Result.IdKey(type: .domain, moduleId: input.moduleId, id: domainData.domainId), res)
+                        logger.debug("Domain 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(arbiId)])
+                        return (Result.IdKey(type: .domain, moduleId: input.moduleId, modelId: domainData.domainId, policyId: domainData.policyId), res)
                     }
                 }
             }
@@ -416,48 +448,42 @@ extension PrivilegeSystem {
             // 取得资源权限的 policy
             let privilegesAuth = input.privileges.map { privilegeData in
                 eventLoop.submitResult { () throws(Errcase.ErrType) in
-                    let id = UUID()
-                    logger.debug("进行 Privilege 仲裁", metadata: ["privilege": .data(privilegeData), "arbitrate-id": .stringConvertible(id)])
+                    let arbiId = UUID()
+                    logger.debug("进行 Privilege 仲裁", metadata: ["privilege": .data(privilegeData), "arbitrate-id": .stringConvertible(arbiId)])
                     
                     let privilegeJson = try required(throws: Errcase.arbitrateFailed, "将资源权限数据转为 Json 失败", category: .internal) {
                         try privilegeData.wrappedJson()
                     }
                     
-                    return (id, privilegeJson)
-                }.flatMap { (id, json) in
+                    return (arbiId, privilegeJson)
+                }.flatMap { (arbiId, json) in
                     self.opa.query.data(
-                        from: "/rules" + policyPath(moduleId: input.moduleId, modelId: privilegeData.privilegeId, type: "privilege", format: .path) + "/allow",
+                        from: "/rules" + policyPath(moduleId: input.moduleId, modelId: nil, policyId: privilegeData.privilegeId, type: "privilege", format: .path) + "/allow",
                         input: json,
                         to: Bool.self
                     )
                     .errCast(Errcase.arbitrateFailed, "OPA Query 资源权限 失败", category: .internal)
                     .map { res in
-                        logger.debug("Privilege 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(id)])
-                        return (Result.IdKey(type: .privilege, moduleId: input.moduleId, id: privilegeData.privilegeId), res)
+                        logger.debug("Privilege 仲裁结果", metadata: ["result": .data(res), "arbitrate-id": .stringConvertible(arbiId)])
+                        return (Result.IdKey(type: .privilege, moduleId: input.moduleId, modelId: nil, policyId: privilegeData.privilegeId), res)
                     }
                 }
             }
             
             // 并行执行所有的权限判断
             return (
-                [roleAuth] +
+                rolesAuth +
                 domainsAuth +
                 privilegesAuth
             ).flatten(on: eventLoop).flatMap { (res: [(Result.IdKey, OPA.Answer<Bool?>)]) in
+                guard res.count > 0 else { return self.eventLoop.makeSucceededResult(.init(result: false, reports: [:])) }
                 var result = Result(result: true, reports: [:])
                 for (k, r) in res {
-                    let resBool: Bool
-                    if let r = r.result { resBool = r }
-                    else {
-                        switch k.type {
-                        case .role: logger.warning("OPA 路径 \(policyPath(moduleId: k.moduleId, modelId: k.id, type: Role.self, format: .path)) 未找到权限设置，默认为不允许任何访问")
-                        case .domain: logger.warning("OPA 路径 \(policyPath(moduleId: k.moduleId, modelId: k.id, type: Domain.self, format: .path)) 未找到权限设置，默认为不允许任何访问")
-                        case .privilege: return self.eventLoop.makeFailedResult(Errcase.arbitrateFailed, "OPA 查询异常，Path 路径未找到", category: .internal)
-                        }
-                        resBool = false
+                    guard let r = r.result else {
+                        return self.eventLoop.makeFailedResult(Errcase.arbitrateFailed, "OPA 查询异常，Path 路径未找到", category: .internal)
                     }
-                    result.and(result: resBool)
-                    result.append(id: k, value: resBool)
+                    result.and(result: r)
+                    result.append(id: k, value: r)
                 }
                 return self.eventLoop.makeSucceededResult(result)
             }
@@ -525,7 +551,16 @@ extension PrivilegeSystem.Arbitrator {
             /// 策略所属模块 ID。
             public let moduleId: UUID
             /// role、domain 或 privilege 的 ID。
-            public let id: UUID
+            public let modelId: UUID?
+            /// 策略的 ID。
+            public let policyId: UUID
+            
+            internal init(type: T, moduleId: UUID, modelId: UUID?, policyId: UUID) {
+                self.type = type
+                self.moduleId = moduleId
+                self.modelId = modelId
+                self.policyId = policyId
+            }
         }
         
         /// 最终仲裁结果。
@@ -554,9 +589,9 @@ extension PrivilegeSystem.Arbitrator {
             
             for (k, v) in reports {
                 let path = switch k.type {
-                case .role: policyPath(moduleId: k.moduleId, modelId: k.id, type: Role.self, format: .path)
-                case .domain: policyPath(moduleId: k.moduleId, modelId: k.id, type: Domain.self, format: .path)
-                case .privilege: policyPath(moduleId: k.moduleId, modelId: k.id, type: "privilege", format: .path)
+                case .role: policyPath(moduleId: k.moduleId, modelId: k.modelId, policyId: k.policyId, type: Role.self, format: .path)
+                case .domain: policyPath(moduleId: k.moduleId, modelId: k.modelId, policyId: k.policyId, type: Domain.self, format: .path)
+                case .privilege: policyPath(moduleId: k.moduleId, modelId: k.modelId, policyId: k.policyId, type: "privilege", format: .path)
                 }
                 
                 if summary {
@@ -594,6 +629,7 @@ extension PrivilegeSystem.Arbitrator {
     }
     
     struct RoleData: Hashable, Encodable, Sendable, CustomStringConvertible, Loggerable, DateWrapperModel {
+        let policyIds: OrderedSet<UUID>
         let resource: [String: AnyCodable]
         let operation: String
         let user: QUser
@@ -604,13 +640,15 @@ extension PrivilegeSystem.Arbitrator {
                 "resource": AnyCodable(resource),
                 "operation": AnyCodable(operation),
                 "user": AnyCodable(user),
-                "role": AnyCodable(role)
+                "role": AnyCodable(role),
+                "policy_ids": AnyCodable(policyIds)
             ])
         }
     }
     
     struct DomainData: Hashable, Encodable, Sendable, CustomStringConvertible, Loggerable, DateWrapperModel {
         let domainId: UUID
+        let policyId: UUID
         let resource: [String: AnyCodable]
         let operation: String
         let user: QUser
@@ -624,7 +662,8 @@ extension PrivilegeSystem.Arbitrator {
                 "operation": AnyCodable(operation),
                 "user": AnyCodable(user),
                 "role": AnyCodable(role),
-                "group": AnyCodable(group)
+                "group": AnyCodable(group),
+                "policy_id": AnyCodable(policyId)
             ])
         }
     }

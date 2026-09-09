@@ -93,7 +93,9 @@ extension PrivilegeSystem {
                         .filter(\.$id == policy.left.id)
                 },
                 moduleId: { $0.left.moduleId },
-                modelIdKey: \.right
+                policyId: { $0.left.id },
+                modelIdKey: \.right,
+                opaPathHaveModelId: true
             )
             .map { logger.info("删除策略 操作成功") }
             .logIfFail(logger: logger)
@@ -159,7 +161,9 @@ extension PrivilegeSystem.PolicyController {
             moduleId: \.moduleId,
             policyKey: \.policy,
             modelId: { pr, _ in pr.right },
-            modelBuilder: { $0.raw(parentId: $1) }
+            policyIdSetter: { $0.set(id: $1) },
+            modelBuilder: { $0.raw(parentId: $1) },
+            opaPathHaveModelId: true
         ).map { _ in }
     }
     
@@ -178,7 +182,9 @@ extension PrivilegeSystem.PolicyController {
             moduleId: \.moduleId,
             policyKey: \.policy,
             modelId: { pr, _ in pr.right },
-            modelBuilder: { $0.raw(parentId: $1) }
+            policyIdSetter: { $0.set(id: $1) },
+            modelBuilder: { $0.raw(parentId: $1) },
+            opaPathHaveModelId: true
         ).flatMapThrowing { ps throws(PrivilegeSystem.Errcase.ErrType) in
             try required(throws: PrivilegeSystem.Errcase.policyCreateFailed, "Returning 解包失败", category: .internal) {
                 try ps.grouped {

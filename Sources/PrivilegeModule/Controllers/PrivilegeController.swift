@@ -55,25 +55,14 @@ public extension PrivilegeModule {
             let logger = getActionLogger()
             logger.info("执行 创建资源权限 操作", metadata: ["privileges": .summaryData(privileges)])
             logger.debug("操作参数", metadata: ["privileges": .data(privileges)])
-            let mappedPrivileges = privileges.mapToSet { p in
-                guard p.id == nil else { return p }
-                return PPrivilege(
-                    id: UUID(),
-                    name: p.name,
-                    summary: p.summary,
-                    policy: p.policy
-                )
-            }
-            
             let db = transactor?.db ?? self.db
-            
             // Pr: PPrivilege
             // P == Pr
             // M: PM<ResourceList>.Privilege
             // PT: Privilege
             return __createPolicy(
                 on: db,
-                relations: mappedPrivileges,        // 资源策略创建无需绑定关系，传入策略列表
+                relations: privileges,              // 资源策略创建无需绑定关系，传入策略列表
                 policyType: __DBM.Privilege.self,
                 label: "资源权限",
                 errThrowing: .privilegeCreateFailed,
@@ -81,11 +70,13 @@ public extension PrivilegeModule {
                 moduleId: { _ in moduleId },        // 服务模块 id 为本模块的 id
                 policyKey: \.policy,
                 modelId: { _, p in p.id! },         // 资源策略无绑定关系，使用本身的策略 id 作为 modelId
+                policyIdSetter: { $0.set(id: $1) },
                 modelBuilder: { p, mid in
                     let raw = p.raw()
                     raw.id = mid                    // 资源策略 fluent 模型的 id 必须指定，否则 fluent 会随机创建
                     return raw
-                }
+                },
+                opaPathHaveModelId: false
             )
             .map { _ in logger.info("创建资源权限 操作成功") }
         }
@@ -104,21 +95,10 @@ public extension PrivilegeModule {
             let logger = getActionLogger()
             logger.info("执行 创建资源权限（返回） 操作", metadata: ["privileges": .summaryData(privileges)])
             logger.debug("操作参数", metadata: ["privileges": .data(privileges)])
-            let mappedPrivileges = privileges.mapToSet { p in
-                guard p.id == nil else { return p }
-                return PPrivilege(
-                    id: UUID(),
-                    name: p.name,
-                    summary: p.summary,
-                    policy: p.policy
-                )
-            }
-            
             let db = transactor?.db ?? self.db
-            
             return __createPolicy(
                 on: db,
-                relations: mappedPrivileges,
+                relations: privileges,
                 policyType: __DBM.Privilege.self,
                 label: "资源权限",
                 errThrowing: .privilegeCreateFailed,
@@ -126,11 +106,13 @@ public extension PrivilegeModule {
                 moduleId: { _ in moduleId } ,
                 policyKey: \.policy,
                 modelId: { _, p in p.id! },
+                policyIdSetter: { $0.set(id: $1) },
                 modelBuilder: { p, mid in
                     let raw = p.raw()
                     raw.id = mid
                     return raw
-                }
+                },
+                opaPathHaveModelId: false
             ).flatMapThrowing { ps throws(Errcase.ErrType) in
                 try required(throws: Errcase.privilegeCreateFailed, "Returning 解包失败", category: .internal) {
                     try ps.map { p in
@@ -170,7 +152,9 @@ public extension PrivilegeModule {
                         .filter(\.$id == policy.id)
                 },
                 moduleId: { _ in moduleId },
-                modelIdKey: \.id
+                policyId: { $0.id },
+                modelIdKey: \.id,
+                opaPathHaveModelId: false
             )
             .map { _ in logger.info("删除资源权限 操作成功") }
         }
@@ -229,7 +213,8 @@ public extension PrivilegeModule {
                     
                     let path = policyPath(
                         moduleId: self.moduleId,
-                        modelId: updater.privilegeId,
+                        modelId: nil,
+                        policyId: updater.privilegeId,
                         type: __DBM.Privilege.self,
                         format: .route
                     )

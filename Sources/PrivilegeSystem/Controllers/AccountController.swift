@@ -231,43 +231,50 @@ extension PrivilegeSystem {
             let db = transactor?.db ?? self.db
             
             return db.trans(throws: .userAuthenticateFailed, "数据库事务执行失败", category: .internal) { db in
-                __SDBM.Role.query(on: db)
-                    .filter(\.$id == roleId)
+                QRole.query(on: db)
+                    .filter(\.id == roleId)
                     .first()
-                    .withError(Errcase.userAuthenticateFailed, "从数据库中获取角色信息失败", category: .internal)
+                    .errCast(Errcase.userAuthenticateFailed, "从数据库中获取角色信息失败", category: .internal)
                     .flatMap
-                { r -> EventLoopResult<__SDBM.Role, BasicError<PrivilegeSystem.Errcase>> in
+                { r -> EventLoopResult<QRole, BasicError<PrivilegeSystem.Errcase>> in
                     guard let role = r else {
                         return db.eventLoop.makeFailedResult(Errcase.userAuthenticateFailed, "角色不存在", category: .external(suggestions: ["请提供正确的角色"], userdata: .init(HTTPResponseStatus.unauthorized)))
                     }
                     return db.eventLoop.makeSucceededResult(role)
-                }.flatMapThrowing { role throws(Errcase.ErrType) -> QRole in
-                    try required(throws: Errcase.userAuthenticateFailed, "创建用户失败", category: .inherit) {
-                        try QRole.make(from: role).get()
-                    }
                 }.flatMap { role in
-                    let tokenGetter: EventLoopRes<__SDBM.Token, PrivilegeSystem.Errcase> = db.eventLoop.submitResult { () throws(Errcase.ErrType) in
+                    let tokenGetter: EventLoopRes<QToken, PrivilegeSystem.Errcase> = db.eventLoop.submitResult { () throws(Errcase.ErrType) in
                         guard token.tokenEncrypted.count == 124 else {
                             throw .init(.userAuthenticateFailed, "用户口令长度不正确，预期为 124 bytes", category: .external()).metadata(["count": .stringConvertible(token.tokenEncrypted.count)])
                         }
                     }.flatMap {
-                        __SDBM.Token.query(on: db)
-                            .filter(\.$credential == token.credential)
+                        QToken.query(on: db)
+                            .filter(\.credential == token.credential)
                             .first()
-                            .withError(Errcase.userAuthenticateFailed, "从数据库中获取用户凭据失败", category: .internal)
+                            .errCast(Errcase.userAuthenticateFailed, "从数据库中获取用户凭据失败", category: .internal)
                     }.flatMapThrowing { token throws(Errcase.ErrType) in
                         guard let t = token else {
                             throw .init(.userAuthenticateFailed, "用户凭据不存在", category: .external(suggestions: ["请先进行登陆"], userdata: .init(HTTPResponseStatus.unauthorized)))
                         }
                         return t
+                    }.flatMap { (t: QToken) in
+                        t.$user.get(on: .init(db: db))
+                            .errCast(Errcase.userAuthenticateFailed, "从数据库拉取 Token 关联用户失败", category: .inherit)
+                            .flatMap
+                        { user in
+                            self.roleController.is(role: role, appointedTo: user, on: .init(db: db))
+                                .errCast(Errcase.userAuthenticateFailed, "判断角色归属失败", category: .inherit)
+                                .flatMap
+                            { result in
+                                guard result else {
+                                    return db.eventLoop.makeFailedResult(Errcase.userAuthenticateFailed.d("所声明的角色(role_id)并未任命给该用户", category: .external(userdata: .init(HTTPResponseStatus.unauthorized))).metadata(["role_id": .stringConvertible(role.id), "user_email": .stringConvertible(user.email)]))
+                                }
+                                return db.eventLoop.makeSucceededResult(t)
+                            }
+                        }
                     }
                     
                     // 检查口令是否正确
-                    return tokenGetter.flatMapThrowing { tokenResult throws(Errcase.ErrType) in
-                        let qToken = try required(throws: Errcase.userAuthenticateFailed, "用户口令转为 DTO 失败", category: .internal) {
-                            try QToken.make(from: tokenResult).get()
-                        }
-                        
+                    return tokenGetter.flatMapThrowing { qToken throws(Errcase.ErrType) in
                         let key = try required(throws: Errcase.userAuthenticateFailed, "口令认证失败", category: .external(suggestions: ["请提供正确的登陆口令"], userdata: .init(HTTPResponseStatus.unauthorized))) {
                             try qToken.verify(encryptedToken: token.tokenEncrypted)
                         }

@@ -12,17 +12,19 @@ package extension OPAController {
     // P: 策略 Policy
     // M: Fluent 模型，可直接存取数据库
     // PT: 策略类型，包括 Domain, Role, Privilege
-    func __createPolicy<Pr: Sendable, P: Sendable, M: PGModel, PT: PolicyType>(
+    func __createPolicy<Relation: Sendable, Policy: Sendable, M: PGModel, PT: PolicyType>(
         on db: PGDatabase,
-        relations: OrderedSet<Pr>,          // 待创建策略，同时每个策略绑定一个所属模型
-        policyType: PT.Type,                // 策略的类型，包括 Domain, Role, Privilege
+        relations: OrderedSet<Relation>,                // 待创建策略，同时每个策略绑定一个所属模型
+        policyType: PT.Type,                            // 策略的类型，包括 Domain, Role, Privilege
         label: String,
         errThrowing: E,
-        policies: (Pr) ->OrderedSet<P>,              // 从一条关系中列出所有相关的 Policies
-        moduleId: @Sendable (P) -> UUID,    // 给出一个 Policy，返回其服务模块的 ID 号
-        policyKey: KeyPath<P, String>,      // 指出 Policy 的 OPA 代码属性
-        modelId:(Pr, P) -> UUID,            // 要求返回策略所绑定的所属模型的 ID 号
-        modelBuilder: (P, UUID) -> M        // 根据提供的 Policy 和 [所属模型的 ID 号] 创建具体的 Policy Fluent 模型
+        policies: (Relation) ->OrderedSet<Policy>,      // 从一条关系中列出所有相关的 Policies
+        moduleId: @Sendable (Policy) -> UUID,           // 给出一个 Policy，返回其服务模块的 ID 号
+        policyKey: KeyPath<Policy, String>,             // 指出 Policy 的 OPA 代码属性
+        modelId: (Relation, Policy) -> UUID,            // 要求返回策略所绑定的所属模型的 ID 号
+        policyIdSetter: (Policy, UUID) -> Policy,       // 要求 Policy 设置 ID 号
+        modelBuilder: (Policy, UUID) -> M,              // 根据提供的 Policy 和 [所属模型的 ID 号] 创建具体的 Policy Fluent 模型
+        opaPathHaveModelId: Bool
     ) -> EventLoopRes<[M], E> {
         // 准备 policy 容器，存储每个对应 policy 的对应路径及其 策略内容
         // 用于后续存取 OPA
@@ -31,11 +33,15 @@ package extension OPAController {
         // 准备要创建到 数据库中 的数据
         // 内容均为 Policy Fluent 模型
         let ps: [M] = relations.flatMap { relation in
-            policies(relation).map { (policy: P) in
+            policies(relation).map { (policyWithoutId: Policy) in
+                let pId = UUID()
+                let policy = policyIdSetter(policyWithoutId, pId)
+                
                 // 准备路径，要放在 opa 中的位置
                 let path = policyPath(
                     moduleId: moduleId(policy),
-                    modelId: modelId(relation, policy),
+                    modelId: opaPathHaveModelId ? modelId(relation, policy): nil,
+                    policyId: pId,
                     type: PT.self,
                     format: .route
                 )
@@ -126,19 +132,22 @@ package extension OPAController {
         }
     }
     
-    func __deletePolicy<P: Sendable, M: PGModel, PT: PolicyType>(
+    func __deletePolicy<Policy: Sendable, M: PGModel, PT: PolicyType>(
         on db: PGDatabase,
-        policy: P,
+        policy: Policy,
         policyType: PT.Type,
         label: String,
         errThrowing: E,
         filterBuilder: @escaping @Sendable (PGDatabase) -> QueryBuilder<M>,
-        moduleId: @Sendable (P) -> UUID,
-        modelIdKey: KeyPath<P, UUID>
+        moduleId: @Sendable (Policy) -> UUID,
+        policyId: @Sendable (Policy) -> UUID,
+        modelIdKey: KeyPath<Policy, UUID>,
+        opaPathHaveModelId: Bool
     ) -> EventLoopRes<Void, E> {
         let path = policyPath(
             moduleId: moduleId(policy),
-            modelId: policy[keyPath: modelIdKey],
+            modelId: opaPathHaveModelId ? policy[keyPath: modelIdKey] : nil,
+            policyId: policyId(policy),
             type: PT.self,
             format: .route
         )

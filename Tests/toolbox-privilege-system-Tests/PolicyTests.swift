@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Query
 @testable import PrivilegeSystem
 
 typealias PT = PolicyTesting
@@ -112,6 +113,20 @@ struct PolicyTesting {
                 .first()
         )
     }
+    
+    /// 通过 RT.ids[index] 精确查询角色策略（策略写入 OPA 时用的就是这个 ID）。
+    private func fetchRolePolicy(index: Int, s: PrivilegeSystem) async throws -> [QPolicy<Role>] {
+        try await s.origin.query(QPolicy<Role>.self)
+            .filter(\.id ~~ RT.policyIds[index])
+            .all()
+    }
+    
+    /// 通过 RT.ids[index] 精确查询域策略（策略写入 OPA 时用的就是这个 ID）。
+    private func fetchDomainPolicy(index: Int, s: PrivilegeSystem) async throws -> [QPolicy<Domain>] {
+        try await s.origin.query(QPolicy<Domain>.self)
+            .filter(\.id ~~ DT.policyIds[index])
+            .all()
+    }
 
     // =========================================================================
     // MARK: 3. 纯角色判定（AT.ids[4] 可用角色验证）
@@ -184,6 +199,7 @@ struct PolicyTesting {
         // user4: 直接用户角色 RT[6]/RT[7]，直接用户域 domain6/domain7
         let user = try await fetchUser(index: 4, s: s)
         let role = try await fetchRole(index: 7, s: s) // RT[7]: allow if {true}
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 7, s: s).first)
 
         let resource = JsonResource(appId: "test2", content: [:])
         let resourceDTO = try await m.resource.create(resources: [resource]).first!
@@ -195,7 +211,7 @@ struct PolicyTesting {
         )
 
         #expect(res.result, "RT[7](allow all) + domain6/7(allow all) → ALLOW")
-        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, id: role.id)
+        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == true, "role 报告应为 true")
         // user4 有直接赋予的 domain6, domain7，无 group
         let domainReports = res.reports.filter { $0.key.type == .domain }
@@ -259,6 +275,7 @@ struct PolicyTesting {
         let (s, m) = try await TestingShared.getSystem()
         let user = try await fetchUser(index: 0, s: s)
         let role = try await fetchRole(index: 0, s: s)
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 0, s: s).first)
 
         let resource = JsonResource(appId: "test4", content: ["global": AnyCodable(true)])
         let resourceDTO = try await m.resource.create(resources: [resource]).first!
@@ -269,7 +286,7 @@ struct PolicyTesting {
             operation: .init(op: JsonOperation.edit), privilegeIds: []
         )
         #expect(!res.result, "SuperAdminRole 不允许 edit → DENY")
-        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, id: role.id)
+        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == false)
         try #require(res.reports.count == 2)
         #expect(res.reports.elements[0].key.type == .role)
@@ -399,6 +416,7 @@ struct PolicyTesting {
         // user1 可用角色: RT[1](Editor), RT[3](Observer)
         let user = try await fetchUser(index: 1, s: s)
         let role = try await fetchRole(index: 3, s: s) // RT[3] = ObserverRole
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 3, s: s).first)
 
         let resource = JsonResource(appId: "test9", content: ["region": AnyCodable("asia")])
         let resourceDTO = try await m.resource.create(resources: [resource]).first!
@@ -410,7 +428,7 @@ struct PolicyTesting {
         )
 
         #expect(res.result, "ObserverRole + view + region=asia → ALLOW")
-        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, id: role.id)
+        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == true, "role 报告应为 true")
         try #require(res.reports.count == 2)
         #expect(res.reports.elements[0].key.type == .role)
@@ -1346,6 +1364,7 @@ struct PolicyTesting {
         let (s, m) = try await TestingShared.getSystem()
         let user = try await fetchUser(index: 4, s: s)
         let role = try await fetchRole(index: 6, s: s) // RT[6]: allow if {true}
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 6, s: s).first)
         let suffix = UUID().uuidString
 
         let privileges = try await m.privilege.createWithReturning(privileges: [
@@ -1373,7 +1392,7 @@ struct PolicyTesting {
         #expect(allow.reports.elements[3].key.type == .privilege)
 
         let privilegeKey = PrivilegeSystem.Arbitrator.Result.IdKey(
-            type: .privilege, moduleId: m.moduleId, id: privilege.id
+            type: .privilege, moduleId: m.moduleId, modelId: nil, policyId: privilege.id
         )
         #expect(allow.reports[privilegeKey] == true, "privilege 报告应为 true")
 
@@ -1436,10 +1455,10 @@ struct PolicyTesting {
         let readPrivilege = try #require(privileges.first)
         let filePrivilege = try #require(privileges.dropFirst().first)
         let readKey = PrivilegeSystem.Arbitrator.Result.IdKey(
-            type: .privilege, moduleId: m.moduleId, id: readPrivilege.id
+            type: .privilege, moduleId: m.moduleId, modelId: nil, policyId: readPrivilege.id
         )
         let fileKey = PrivilegeSystem.Arbitrator.Result.IdKey(
-            type: .privilege, moduleId: m.moduleId, id: filePrivilege.id
+            type: .privilege, moduleId: m.moduleId, modelId: nil, policyId: filePrivilege.id
         )
         
         let resource = JsonResource(appId: "test38", content: ["kind": AnyCodable("file")])
@@ -1620,6 +1639,7 @@ struct PolicyTesting {
         // 测试：SuperAdmin+view → role 失败，即使 domain0 通过也 DENY
         let user = try await fetchUser(index: 0, s: s)
         let role = try await fetchRole(index: 0, s: s) // RT[0] = SuperAdminRole: manage_all only
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 0, s: s).first)
 
         let resource = JsonResource(appId: "test43", content: ["global": AnyCodable(true)]) // domain0 通过
         let resourceDTO = try await m.resource.create(resources: [resource]).first!
@@ -1631,7 +1651,7 @@ struct PolicyTesting {
         )
 
         #expect(!res.result, "role 失败（SuperAdmin 不含 view）→ DENY")
-        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, id: role.id)
+        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == false)
         try #require(res.reports.count == 2)
         #expect(res.reports.elements[0].key.type == .role)
@@ -1802,6 +1822,7 @@ struct PolicyTesting {
         // Shared.roleForGroup[11] = [group0]，user6 在 group6/group7，二者均为 group0 子群组。
         let user = try await fetchUser(index: 6, s: s)
         let role = try await fetchRole(index: 11, s: s) // RT[11]: allow if {true}
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 11, s: s).first)
 
         let applicableGroups = try await s.role.verify(groupRole: role, appointedTo: user)
         #expect(applicableGroups.map { $0.id }.contains(GT.ids[0]), "RT[11] 应作为父群组 group0 的群组角色对 user6 可用")
@@ -1816,7 +1837,7 @@ struct PolicyTesting {
         )
 
         #expect(res.result, "父群组角色 + 继承 domain0(global=true) + 子群组 domain4 → ALLOW")
-        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, id: role.id)
+        let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == true)
         #expect(res.reports.filter { $0.key.type == .domain }.values.allSatisfy { $0 })
         try #require(res.reports.count == 3)
@@ -1889,6 +1910,7 @@ struct PolicyTesting {
         // user0 可用角色: RT[0](SuperAdmin), RT[3](Observer in-group)
         let user = try await fetchUser(index: 0, s: s) // user0 在 group0(domain0: global==true)
         let role = try await fetchRole(index: 0, s: s) // RT[0] SuperAdminRole: manage_all only
+        let rolePolicy = try #require(try await fetchRolePolicy(index: 0, s: s).first)
 
         let resource = JsonResource(appId: "test49", content: ["global": AnyCodable(true)])
         let resourceDTO = try await m.resource.create(resources: [resource]).first!
@@ -1900,7 +1922,7 @@ struct PolicyTesting {
         )
         #expect(!res.result, "SuperAdminRole 不允许 view → DENY，即使 domain 全通过")
         let roleKey = PrivilegeSystem.Arbitrator.Result.IdKey(
-            type: .role, moduleId: m.moduleId, id: role.id)
+            type: .role, moduleId: m.moduleId, modelId: role.id, policyId: rolePolicy.id)
         #expect(res.reports[roleKey] == false)
         try #require(res.reports.count == 2)
         #expect(res.reports.elements[0].key.type == .role)
@@ -2682,6 +2704,162 @@ struct PolicyTesting {
         #expect(deny.reports.elements[2].value == false)
     }
     
+    @Test("多策略角色权限仲裁测试")
+    func multiPolicyRoleTest() async throws {
+        let (s, m) = try await TestingShared.getSystem()
+        
+        let user = try await s.account.register(for: PUser(email: "multi_role_policy_testing@email.com", hashedPassword: Crypto.hash("1234567890").get()))
+        let role = try await #require(s.role.create(roles: [.init(name: "Multi Policy Role", summary: "多权限角色")]).first)
+        
+        let rolePolicy1 = PPolicy<Role>(moduleId: m.moduleId, policy: "allow if { input.user.email == \"multi_role_policy_testing@email.com\" }")
+        let rolePolicy2 = PPolicy<Role>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Never!\" }")
+        let rolePolicy3 = PPolicy<Role>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Multi Policy Role\" }")
+        
+        try await s.role.appoint {
+            OrderedSet([role]) => OrderedSet([user])
+        }
+        
+        let policyRelations = try await s.policy.createWithReturning(to: Role.self) {
+            OrderedSet([rolePolicy1, rolePolicy2, rolePolicy3]) => role.id
+        }
+
+        let resource = JsonResource(appId: "test202", content: [:])
+        let resourceDTO = try await m.resource.create(resources: [resource]).first!
+        
+        let res = try await s.arbitrator.judge(
+            moduleId: m.moduleId, user: user, role: role,
+            resource: try #require(GResource(resourceDTO)),
+            operation: .init(op: JsonOperation.anything), privilegeIds: []
+        )
+        
+        #expect(res.result == false)
+        #expect(res.reports.count == 3)
+        let key1 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: policyRelations[role.id]![0].id)
+        #expect(res.reports[key1] == true)
+        let key2 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: policyRelations[role.id]![1].id)
+        #expect(res.reports[key2] == false)
+        let key3 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: policyRelations[role.id]![2].id)
+        #expect(res.reports[key3] == true)
+    }
+    
+    @Test("多策略角色权限仲裁测试-通过")
+    func multiPolicyRoleTest_pass() async throws {
+        let (s, m) = try await TestingShared.getSystem()
+        
+        let user = try await s.account.register(for: PUser(email: "multi_role_policy_testing_should_pass@email.com", hashedPassword: Crypto.hash("1234567890").get()))
+        let role = try await #require(s.role.create(roles: [.init(name: "Multi Policy Should Pass Role", summary: "多权限角色")]).first)
+        
+        let rolePolicy1 = PPolicy<Role>(moduleId: m.moduleId, policy: "allow if { input.user.email == \"multi_role_policy_testing_should_pass@email.com\" }")
+        let rolePolicy2 = PPolicy<Role>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Multi Policy Should Pass Role\" }")
+        
+        try await s.role.appoint {
+            OrderedSet([role]) => OrderedSet([user])
+        }
+        
+        let policyRelations = try await s.policy.createWithReturning(to: Role.self) {
+            OrderedSet([rolePolicy1, rolePolicy2]) => role.id
+        }
+
+        let resource = JsonResource(appId: "test204", content: [:])
+        let resourceDTO = try await m.resource.create(resources: [resource]).first!
+        
+        let res = try await s.arbitrator.judge(
+            moduleId: m.moduleId, user: user, role: role,
+            resource: try #require(GResource(resourceDTO)),
+            operation: .init(op: JsonOperation.anything), privilegeIds: []
+        )
+        
+        #expect(res.result == true)
+        #expect(res.reports.count == 2)
+        let key1 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: policyRelations[role.id]![0].id)
+        #expect(res.reports[key1] == true)
+        let key2 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .role, moduleId: m.moduleId, modelId: role.id, policyId: policyRelations[role.id]![1].id)
+        #expect(res.reports[key2] == true)
+    }
+    
+    @Test("多策略域权限仲裁测试")
+    func multiPolicyDomainTest() async throws {
+        let (s, m) = try await TestingShared.getSystem()
+        
+        let user = try await s.account.register(for: PUser(email: "multi_policy_domain_testing@email.com", hashedPassword: Crypto.hash("1234567890").get()))
+        let domain = try await #require(s.domain.create(domains: [.init(name: "Multi Policy Domain", summary: "多权限角色")]).first)
+        let role = try await #require(s.role.create(roles: [.init(name: "Empty Testing Role", summary: "无权限测试角色")]).first)
+        
+        let domainPolicy1 = PPolicy<Domain>(moduleId: m.moduleId, policy: "allow if { input.user.email == \"multi_policy_domain_testing@email.com\" }")
+        let domainPolicy2 = PPolicy<Domain>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Never!\" }")
+        let domainPolicy3 = PPolicy<Domain>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Multi Policy Role\" }")
+        
+        try await s.role.appoint {
+            OrderedSet([role]) => OrderedSet([user])
+        }
+        
+        try await s.domain.assign {
+            OrderedSet([domain]) => OrderedSet([user])
+        }
+        
+        let policyRelations = try await s.policy.createWithReturning(to: Domain.self) {
+            OrderedSet([domainPolicy1, domainPolicy2, domainPolicy3]) => domain.id
+        }
+
+        let resource = JsonResource(appId: "test203", content: [:])
+        let resourceDTO = try await m.resource.create(resources: [resource]).first!
+        
+        let res = try await s.arbitrator.judge(
+            moduleId: m.moduleId, user: user, role: role,
+            resource: try #require(GResource(resourceDTO)),
+            operation: .init(op: JsonOperation.anything), privilegeIds: []
+        )
+        
+        #expect(res.result == false)
+        #expect(res.reports.count == 3)
+        let key1 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .domain, moduleId: m.moduleId, modelId: domain.id, policyId: policyRelations[domain.id]![0].id)
+        #expect(res.reports[key1] == true)
+        let key2 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .domain, moduleId: m.moduleId, modelId: domain.id, policyId: policyRelations[domain.id]![1].id)
+        #expect(res.reports[key2] == false)
+        let key3 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .domain, moduleId: m.moduleId, modelId: domain.id, policyId: policyRelations[domain.id]![2].id)
+        #expect(res.reports[key3] == false)
+    }
+    
+    @Test("多策略域权限仲裁测试-通过")
+    func multiPolicyDomainTest_pass() async throws {
+        let (s, m) = try await TestingShared.getSystem()
+        
+        let user = try await s.account.register(for: PUser(email: "multi_policy_domain_testing_should_pass@email.com", hashedPassword: Crypto.hash("1234567890").get()))
+        let domain = try await #require(s.domain.create(domains: [.init(name: "Multi Policy Domain Should Pass", summary: "多权限角色")]).first)
+        let role = try await #require(s.role.create(roles: [.init(name: "Empty Testing Role Should Pass", summary: "无权限测试角色")]).first)
+        
+        let domainPolicy1 = PPolicy<Domain>(moduleId: m.moduleId, policy: "allow if { input.user.email == \"multi_policy_domain_testing_should_pass@email.com\" }")
+        let domainPolicy2 = PPolicy<Domain>(moduleId: m.moduleId, policy: "allow if { input.role.name == \"Empty Testing Role Should Pass\" }")
+        
+        try await s.role.appoint {
+            OrderedSet([role]) => OrderedSet([user])
+        }
+        
+        try await s.domain.assign {
+            OrderedSet([domain]) => OrderedSet([user])
+        }
+        
+        let policyRelations = try await s.policy.createWithReturning(to: Domain.self) {
+            OrderedSet([domainPolicy1, domainPolicy2]) => domain.id
+        }
+
+        let resource = JsonResource(appId: "test205", content: [:])
+        let resourceDTO = try await m.resource.create(resources: [resource]).first!
+        
+        let res = try await s.arbitrator.judge(
+            moduleId: m.moduleId, user: user, role: role,
+            resource: try #require(GResource(resourceDTO)),
+            operation: .init(op: JsonOperation.anything), privilegeIds: []
+        )
+        
+        #expect(res.result == true)
+        #expect(res.reports.count == 2)
+        let key1 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .domain, moduleId: m.moduleId, modelId: domain.id, policyId: policyRelations[domain.id]![0].id)
+        #expect(res.reports[key1] == true)
+        let key2 = PrivilegeSystem.Arbitrator.Result.IdKey(type: .domain, moduleId: m.moduleId, modelId: domain.id, policyId: policyRelations[domain.id]![1].id)
+        #expect(res.reports[key2] == true)
+    }
+    
     @Test("空权限仲裁测试")
     func emptyPrivilegeTest() async throws {
         let (s, m) = try await TestingShared.getSystem()
@@ -2701,8 +2879,9 @@ struct PolicyTesting {
             resource: try #require(GResource(resourceDTO)),
             operation: .init(op: JsonOperation.anything), privilegeIds: []
         )
-
+        
         #expect(res.result == false)
+        #expect(res.reports.count == 0)
     }
 
     // =========================================================================

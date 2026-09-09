@@ -68,20 +68,33 @@ package enum PathFormat: Sendable {
 
 package func policyPath<PT: PolicyType>(
     moduleId: UUID,
-    modelId: UUID,
+    modelId: UUID?,
+    policyId: UUID,
     type: PT.Type = PT.self,
     format: PathFormat
 ) -> String {
-    policyPath(moduleId: moduleId, modelId: modelId, type: PT.typeId, format: format)
+    policyPath(moduleId: moduleId, modelId: modelId, policyId: policyId, type: PT.typeId, format: format)
 }
 
 package func policyPath(
     moduleId: UUID,
-    modelId: UUID,
+    modelId: UUID?,
+    policyId: UUID,
     type: String,
     format: PathFormat
 ) -> String {
-    "\(format.prefix)m_\(moduleId.hexString)\(format.sign)\(type)\(format.sign)id_\(modelId.hexString)"
+    var components = [
+        "\(format.prefix)m_\(moduleId.hexString)",
+        type
+    ]
+    
+    if let modelId = modelId {
+        components.append("v_\(modelId.hexString)")
+    }
+    
+    components.append("p_\(policyId.hexString)")
+    
+    return components.joined(separator: format.sign)
 }
 
 package func assemblePolicy(

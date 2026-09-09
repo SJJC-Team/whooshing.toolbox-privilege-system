@@ -32,6 +32,14 @@ public struct PPolicy<G: PolicyType>: DTO.Prepare {
         case moduleId = "module_id"
         case policy
     }
+    
+    public func set(id: UUID) -> Self {
+        .init(
+            id: id,
+            moduleId: self.moduleId,
+            policy: self.policy
+        )
+    }
 }
 
 public struct QPolicy<G: PolicyType>: DTO.Queried {

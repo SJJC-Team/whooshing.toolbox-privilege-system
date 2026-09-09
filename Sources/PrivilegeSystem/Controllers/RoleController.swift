@@ -133,12 +133,14 @@ extension PrivilegeSystem {
             logger.info("执行 更新角色 操作", metadata: ["data": .summaryData(updater)])
             logger.debug("更新角色 详细请求数据", metadata: ["data": .data(updater)])
             let db = transactor?.db ?? self.db
+            let roleId = updater.roleId
+            updater.reservedRoleNames = self.reservedRoleName
             return __update(
                 on: db,
                 updater: updater,
                 label: "角色",
                 errThrowing: .roleUpdateFailed,
-                filterBuilder: { $0.filter(\.$id == updater.roleId) },
+                filterBuilder: { $0.filter(\.$id == roleId) },
                 dtoBuilder: { QRole.make(from: $0) }
             )
             .map { 

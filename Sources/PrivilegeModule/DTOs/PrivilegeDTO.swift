@@ -50,6 +50,15 @@ public extension PM {
             case summary
             case policy
         }
+        
+        public func set(id: UUID) -> Self {
+            .init(
+                id: id,
+                name: self.name,
+                summary: self.summary,
+                policy: self.policy
+            )
+        }
     }
     
     struct QPrivilege: DTO.Queried {
