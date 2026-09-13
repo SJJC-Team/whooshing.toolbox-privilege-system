@@ -264,7 +264,7 @@ public extension PRole.Updater {
     }
     
     func update(summary: @escaping @autoclosure () throws -> String?) -> Self {
-        updates[\.name] = { builder, _ in
+        updates[\.summary] = { builder, _ in
             builder.set(\.$summary, to: try summary())
         }
         

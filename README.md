@@ -186,9 +186,9 @@ try await module.privilege.attach {
 
 | 特化类型 | 适用对象 | 独有字段 |
 |---|---|---|
-| `RolePolicy` | 角色策略 `PPolicy<Role>` | `roleId` |
-| `DomainPolicy` | 域策略 `PPolicy<Domain>` | `domainId`、`group`（可为 null） |
-| `PrivilegePolicy` | 资源权限 `PPrivilege` | `privilegeId` |
+| `RolePolicy` | 角色策略 `PPolicy<Role>` | `role`（`role.id` / `role.name` …）、`policyIds` |
+| `DomainPolicy` | 域策略 `PPolicy<Domain>` | `domainId`、`policyId`、`group`（直接授予时不存在，用 `group.exists` 判断） |
+| `PrivilegePolicy` | 资源权限 `PPrivilege` | `privilegeId`（映射 `input.privilege_id`） |
 
 三者均可访问 `operation`、`user`、`role` 与 `resource`（动态 JSON，可用点语法任意下钻）。合成语义与 OPA 一致：同一 `allow` 内 `&&` 须全部满足，多个 `allow` 任一满足即可，任一 `deny` 命中即否决；未设置任何规则时拒绝所有。快捷入口有 `.allowAll` 与 `.denyAll`，DSL 未覆盖的表达式可用 `.raw("...")` 原样嵌入。
 

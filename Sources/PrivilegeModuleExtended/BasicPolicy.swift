@@ -30,11 +30,11 @@ import PrivilegeModule
 ///
 /// | 特化类型 | 仲裁 input | 独有字段 |
 /// |---|---|---|
-/// | ``RolePolicy`` | `RoleData` | `roleId` |
-/// | ``DomainPolicy`` | `DomainData` | `domainId`、`group`（可为 null） |
-/// | ``PrivilegePolicy`` | `PrivilegeData` | `privilegeId` |
+/// | ``RolePolicy`` | `RoleData` | `policy_ids`（本次参与仲裁的该角色全部策略 ID） |
+/// | ``DomainPolicy`` | `DomainData` | `domain_id`、`policy_id`、`group`（直接授予时**该键缺失**） |
+/// | ``PrivilegePolicy`` | `PrivilegeData` | `privilege_id` |
 ///
-/// 三者均包含 `operation`（本次操作）、`user`（发起用户）与
+/// 三者均包含 `operation`（本次操作）、`user`（发起用户）、`role`（本次使用的角色）与
 /// `resource`（资源 JSON，形状不固定）。
 ///
 /// # 合成语义
@@ -148,10 +148,10 @@ import PrivilegeModule
 /// 类型本身遵循 `Codable` / `Hashable` / `Loggerable`，策略定义可
 /// 序列化存储、参与日志 metadata 或在测试中做相等性断言。
 ///
-/// - Important: 字段路径与仲裁模块的实际编码严格对齐——input 顶层键为
-///   camelCase（`roleId` / `domainId` / `privilegeId`），`QUser` / `QGroup`
-///   内部键为 snake_case（`created_at` 等），修改 DTO 编码时须同步更新
-///   对应的 `PolicyInput` 镜像。
+/// - Important: 字段路径与仲裁模块的实际编码严格对齐——自 V1.1.1.3 起 input 顶层键与
+///   `QUser` / `QRole` / `QGroup` 内部键统一为 snake_case（`domain_id` / `policy_id` /
+///   `privilege_id` / `created_at` 等），修改 `Arbitrator` 中 `RoleData` / `DomainData` /
+///   `PrivilegeData` 的 `CodingKeys` 时须同步更新对应的 `PolicyInput` 镜像。
 /// - Note: `||` 的析取范式展开在分支很多时会使规则数成倍增长，
 ///   基本策略通常无感；确有大量分支时建议拆分为多条 `.allow`。
 public struct BasicPolicy<Input: PolicyInput>: Codable, Sendable, Hashable, CustomStringConvertible, Loggerable {
@@ -701,9 +701,13 @@ public struct GroupPolicyFields: Sendable {
     public var createdAt: DatePolicyField { .init(path + ".created_at") }
     public var updatedAt: DatePolicyField { .init(path + ".updated_at") }
 
-    /// 群组存在（域权限经由群组授予；用户直接被授予时为 null）。
+    /// 群组存在（域权限经由群组授予）。
+    ///
+    /// 【修复】用户直接被授予域时，`DomainData.group` 为 nil，Encodable 以 `encodeIfPresent` 编码，
+    /// 因此 `input.group` 在 OPA 中是 **undefined 而非 null**，原先的 `input.group != null` 永远不成立。
+    /// 改为直接引用该路径：定义即为真；取反（`!$0.group.exists`）会生成 `not input.group`，未定义时为真。
     public var exists: PolicyPredicate {
-        .condition(.init(lhs: path, op: .notEqual, rhs: "null"))
+        .condition(.init(lhs: path, op: .raw, rhs: ""))
     }
 
     /// 逃生舱口：以动态 JSON 字段访问编码后的任意路径。
@@ -712,9 +716,16 @@ public struct GroupPolicyFields: Sendable {
     }
 }
 
-/// 角色策略的 input（对应仲裁请求中的 `RoleData`）。
+/// 角色策略的 input（对应仲裁请求中的 `RoleData`，编码键见 `Arbitrator.RoleData.CodingKeys`）。
+///
+/// 【修复】V1.1.1.3 把仲裁 input 改为 snake_case 后，此处仍生成 `input.roleId`，而 `RoleData` 中已不再有
+/// 该字段（角色信息在 `input.role` 对象中），用 DSL 写出的角色 ID 条件永远不成立。
+/// 现改为镜像 `input.role.id`；`roleId` 保留为兼容别名。
 public struct RolePolicyInput: PolicyInput {
-    public let roleId = PolicyField<UUID>("input.roleId")
+    /// 本次使用的角色 ID，等价于 `role.id`（兼容旧写法）
+    public var roleId: PolicyField<UUID> { role.id }
+    /// 本次参与仲裁的该角色在该模块下的全部策略 ID（`input.policy_ids`，数组）
+    public let policyIds = JSONPolicyField("input.policy_ids")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
     public let role = RolePolicyFields("input.role")
@@ -723,22 +734,28 @@ public struct RolePolicyInput: PolicyInput {
     public init() {}
 }
 
-/// 域策略的 input（对应仲裁请求中的 `DomainData`）。
+/// 域策略的 input（对应仲裁请求中的 `DomainData`，编码键见 `Arbitrator.DomainData.CodingKeys`）。
+///
+/// 【修复】顶层键已为 snake_case：`input.domainId` → `input.domain_id`，并补充 `policy_id`。
 public struct DomainPolicyInput: PolicyInput {
-    public let domainId = PolicyField<UUID>("input.domainId")
+    public let domainId = PolicyField<UUID>("input.domain_id")
+    /// 当前正在求值的这条域策略自身的 ID
+    public let policyId = PolicyField<UUID>("input.policy_id")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
     public let role = RolePolicyFields("input.role")
-    /// 该域经由哪个群组授予；用户直接被授予时为 null。
+    /// 该域经由哪个群组授予；用户直接被授予时该键缺失（见 `GroupPolicyFields.exists`）。
     public let group = GroupPolicyFields("input.group")
     public let resource = JSONPolicyField("input.resource")
 
     public init() {}
 }
 
-/// 资源权限策略的 input（对应仲裁请求中的 `PrivilegeData`）。
+/// 资源权限策略的 input（对应仲裁请求中的 `PrivilegeData`，编码键见 `Arbitrator.PrivilegeData.CodingKeys`）。
+///
+/// 【修复】顶层键已为 snake_case：`input.privilegeId` → `input.privilege_id`。
 public struct PrivilegePolicyInput: PolicyInput {
-    public let privilegeId = PolicyField<UUID>("input.privilegeId")
+    public let privilegeId = PolicyField<UUID>("input.privilege_id")
     public let operation = PolicyField<String>("input.operation")
     public let user = UserPolicyFields("input.user")
     public let role = RolePolicyFields("input.role")

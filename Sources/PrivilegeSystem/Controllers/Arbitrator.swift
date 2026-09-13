@@ -284,6 +284,7 @@ extension PrivilegeSystem {
                     return __SDBM.DomainPolicy.query(on: self.db)
                         .join(__SDBM.DomainGroupPivot.self, on: \__SDBM.DomainPolicy.$parent.$id == \__SDBM.DomainGroupPivot.$primaryModel.$id)
                         .filter(__SDBM.DomainGroupPivot.self, \.$secondaryModel.$id ~~ Array(groups.keys))
+                        .filter(\.$moduleId == moduleId)
                         .field(\.$id)
                         .field(\.$parent.$id)
                         .field(__SDBM.DomainGroupPivot.self, \.$id)
@@ -326,6 +327,7 @@ extension PrivilegeSystem {
                 __SDBM.DomainPolicy.query(on: self.db)
                     .join(__SDBM.UserDomainPivot.self, on: \__SDBM.DomainPolicy.$parent.$id == \__SDBM.UserDomainPivot.$secondaryModel.$id)
                     .filter(__SDBM.UserDomainPivot.self, \.$primaryModel.$id == userDTO.id)
+                    .filter(\.$moduleId == moduleId)
                     .field(\.$id)
                     .field(\.$parent.$id)
                     .unique()
@@ -357,6 +359,7 @@ extension PrivilegeSystem {
                 { domainDatas in
                     __SDBM.RolePolicy.query(on: self.db)
                         .filter(\.$parent.$id == roleDTO.id)
+                        .filter(\.$moduleId == moduleId)
                         .all()
                         .withError(Errcase.arbitrationDataCollectFailed, "从数据库中取得 Role 的 policy 列表失败", category: .inherit)
                         .flatMapThrowing
