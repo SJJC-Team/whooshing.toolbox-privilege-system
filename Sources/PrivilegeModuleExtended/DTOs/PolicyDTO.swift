@@ -171,6 +171,7 @@ extension QPolicy: Query.Queriable {
     
     public static func buildAllFields<Base>(_ builder: QueryBuilder<Base>) -> QueryBuilder<Base> where Base: FluentKit.Model {
         builder
+            .field(Model.self, \.$parent.$id)
             .field(Model.self, \.$moduleId)
             .field(Model.self, \.$policy)
             .field(Model.self, \.$id)
