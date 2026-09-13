@@ -26,21 +26,20 @@ final public class OptionalSuperProperty<From, To>: @unchecked Sendable
         }
     }
     
-    public package(set) var id: UUID? {
-        get {
-            lock.withLock {
-                guard __idGiven else {
-                    fatalError("模型的 OptionalSuper 字段所存储的外键 id 未赋值")
-                }
-                
-                return __id
+    public var id: UUID? {
+        lock.withLock {
+            guard __idGiven else {
+                fatalError("模型的 OptionalSuper 字段所存储的外键 id 未赋值")
             }
+            
+            return __id
         }
-        set {
-            lock.withLock {
-                __idGiven = true
-                __id = newValue
-            }
+    }
+    
+    package func set(id newValue: UUID?) {
+        lock.withLock {
+            __idGiven = true
+            __id = newValue
         }
     }
     

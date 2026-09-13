@@ -96,7 +96,7 @@ public struct QPolicy<G: PolicyType>: DTO.Queried {
         self.updatedAt = updatedAt
         self.__m = model
         
-        self.$parent.id = parentId
+        self.$parent.set(id: parentId)
     }
     
     public init(from decoder: any Decoder) throws {

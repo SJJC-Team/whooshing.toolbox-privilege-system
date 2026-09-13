@@ -244,7 +244,7 @@ public struct QToken: DTO.Queried {
         self.createdAt = createdAt
         self.__m = model
         
-        self.$user.id = userId
+        self.$user.set(id: userId)
     }
     
     public init(from decoder: any Decoder) throws {

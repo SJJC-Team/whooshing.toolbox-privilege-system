@@ -118,7 +118,7 @@ public struct QUserInfo: DTO.Queried {
         self.updatedAt = updatedAt
         self.__m = model
         
-        self.$user.id = userId
+        self.$user.set(id: userId)
         self.$alternateEmails.fromId = id
         self.$phones.fromId = id
         self.$addresses.fromId = id

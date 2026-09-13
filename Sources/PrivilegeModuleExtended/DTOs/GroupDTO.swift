@@ -130,7 +130,7 @@ public struct QGroup: DTO.Queried {
         self.updatedAt = updatedAt
         self.__m = model
         
-        self.$parent.id = parentId
+        self.$parent.set(id: parentId)
         self.$childs.fromId = id
         self.$users.fromId = id
         self.$roles.fromId = id

@@ -25,20 +25,19 @@ final public class SuperProperty<From, To>: @unchecked Sendable
             return __value!
         }
     }
-    
-    public package(set) var id: UUID {
-        get {
-            lock.withLock {
-                guard let id = __id else {
-                    fatalError("模型的 Super 字段所存储的外键 id 未赋值")
-                }
-                
-                return id
+
+    public var id: UUID {
+        lock.withLock {
+            guard let id = __id else {
+                fatalError("模型的 Super 字段所存储的外键 id 未赋值")
             }
+            
+            return id
         }
-        set {
-            lock.withLock { __id = newValue }
-        }
+    }
+    
+    package func set(id newValue: UUID) {
+        lock.withLock { __id = newValue }
     }
     
     public var loaded: Bool { __value != nil }

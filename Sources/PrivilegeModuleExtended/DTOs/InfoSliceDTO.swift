@@ -111,7 +111,7 @@ public struct QInfoSlice<G: UserInfoModel>: DTO.Queried {
         self.updatedAt = updatedAt
         self.__m = model
         
-        self.$userInfo.id = userInfoId
+        self.$userInfo.set(id: userInfoId)
     }
     
     public init(from decoder: any Decoder) throws {
